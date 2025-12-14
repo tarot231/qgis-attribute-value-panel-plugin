@@ -1,0 +1,16 @@
+[general]
+name=Attribute Value Panel
+qgisMinimumVersion=3.14
+description=Lists attribute values of selected features vertically
+description[ja]=選択された地物の属性値を縦に一覧表示します
+about=This plugin provides a dockable panel for viewing the attribute values of selected features. By listing field-value pairs vertically without gaps, it improves data visibility when dealing with numerous fields.
+about[ja]=このプラグインは、選択した地物の属性値を表示するためのドッキング可能なパネルを提供します。フィールドと値の組を縦に隙間なく一覧表示することで、フィールドの数が多い場合のデータの可視性を向上させます。
+version=0.3
+author=Tarot Osuji
+email=tarot@sdf.org
+homepage=https://plugins.qgis.org/plugins/AttributeValuePanel
+tracker=https://github.com/tarot231/qgis-attribute-value-panel-plugin/issues
+repository=https://github.com/tarot231/qgis-attribute-value-panel-plugin
+tags=attribute, panel
+supportsQt6=True
+experimental=True
