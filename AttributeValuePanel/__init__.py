@@ -45,13 +45,92 @@ class AttributeValuePanel(QObject):
         self.dock = AttributeValueDock()
         self.dock.setWindowTitle(self.name)
         self.dock.setObjectName(self.__class__.__name__.replace('Panel', ''))
+        self.restore_dock_state()
+
         self.model = self.dock.view.model()
+        self.dock.view.set_editable(False)
 
         self.current_layer = None
-        self.iface.currentLayerChanged.connect(self.slot_currentLayerChanged)
-        self.slot_currentLayerChanged(self.iface.activeLayer())
+        self.dock.visibilityChanged.connect(self.slot_visibilityChanged)
+        self.slot_visibilityChanged(is_user_visible(self.dock))
 
-        self.restore_dock_state()
+    def unload(self):
+        self.slot_visibilityChanged(False)  # disconnect signals
+        self.dock.visibilityChanged.disconnect(self.slot_visibilityChanged)
+        self.save_dock_state()
+        QgsApplication.removeTranslator(self.translator)
+
+    def slot_visibilityChanged(self, visible):
+        if visible:
+            self.iface.currentLayerChanged.connect(self.slot_currentLayerChanged)
+            self.slot_currentLayerChanged(self.iface.activeLayer())
+        else:
+            self.disconnect_selectionChanged()
+            self.disconnect_currentLayerChanged()
+
+    def slot_currentLayerChanged(self, layer):
+        self.clear_model()
+        self.disconnect_selectionChanged()
+        self.current_layer = layer if isinstance(layer, QgsVectorLayer) else None
+        try:
+            self.current_layer.selectionChanged.connect(self.slot_selectionChanged)
+            self.slot_selectionChanged()
+        except AttributeError:
+            # AttributeError: 'NoneType' object has no attribute 'selectionChanged'
+            pass
+        except Exception as e:
+            # DEBUG
+            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
+                    f'slot_currentLayerChanged: {type(e)} {e}', 'Debug', level=Qgis.Info)
+            pass
+
+    def disconnect_currentLayerChanged(self):
+        try:
+            self.iface.currentLayerChanged.disconnect(self.slot_currentLayerChanged)
+        except TypeError:
+            # TypeError: 'method' object is not connected
+            pass
+        except Exception as e:
+            # DEBUG
+            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
+                    f'disconnect_currentLayerChanged: {type(e)} {e}', 'Debug', level=Qgis.Info)
+            pass
+
+    def slot_selectionChanged(self):
+        self.clear_model()
+        try:
+            if not self.current_layer.selectedFeatureCount():
+                return
+        except Exception as e:
+            # DEBUG
+            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
+                    f'slot_selectionChanged: {type(e)} {e} {self.current_layer}', 'Debug', level=Qgis.Info)
+            return
+        for field in self.current_layer.fields():
+            field_name = field.name()
+            key_item = QStandardItem(field_name)
+            values = [f.attribute(field_name)
+                    for f in self.current_layer.getSelectedFeatures()]
+            value_item = QStandardItem()
+            value_item.setData(values, Qt.ItemDataRole.DisplayRole)
+            self.model.appendRow([key_item, value_item])
+
+    def disconnect_selectionChanged(self):
+        try:
+            self.current_layer.selectionChanged.disconnect(self.slot_selectionChanged)
+        except (AttributeError, RuntimeError):
+            # AttributeError: 'Qgs***Layer' object has no attribute 'selectionChanged'
+            # AttributeError: 'NoneType' object has no attribute 'selectionChanged'
+            # RuntimeError: wrapped C/C++ object of type QgsVectorLayer has been deleted
+            pass
+        except Exception as e:
+            # DEBUG
+            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
+                    f'disconnect_selectionChanged: {type(e)} {e}', 'Debug', level=Qgis.Info)
+            pass
+
+    def clear_model(self):
+        self.model.removeRows(0, self.model.rowCount())
 
     def restore_dock_state(self):
         mainwin = self.iface.mainWindow()
@@ -100,63 +179,6 @@ class AttributeValuePanel(QObject):
                 [x.objectName() for x in get_all_tabified(self.dock)])
         st.setValue('dockArea', mainwin.dockWidgetArea(self.dock))
         st.endGroup()
-
-    def slot_currentLayerChanged(self, layer):
-        try:
-            if self.current_layer:
-                self.current_layer.selectionChanged.disconnect(self.slot_selectionChanged)
-        except RuntimeError:
-            # RuntimeError: wrapped C/C++ object of type QgsVectorLayer has been deleted
-            pass
-        self.clear_model()
-        self.current_layer = layer if isinstance(layer, QgsVectorLayer) else None
-        if self.current_layer:
-            try:
-                self.current_layer.selectionChanged.connect(self.slot_selectionChanged)
-                self.slot_selectionChanged()
-            except Exception as e:
-                # DEBUG
-                QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
-                        f'slot_currentLayerChanged: {type(e)} {e}', 'Debug', level=Qgis.Info)
-                pass
-
-    def clear_model(self):
-        self.model.removeRows(0, self.model.rowCount())
-
-    def slot_selectionChanged(self):
-        self.clear_model()
-        try:
-            features = self.current_layer.selectedFeatures()
-        except Exception as e:
-            # DEBUG
-            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
-                    f'slot_selectionChanged: {type(e)} {e} {self.current_layer}', 'Debug', level=Qgis.Info)
-            features = []
-        if not features:
-            return
-        for field in features[0].fields():
-            field_name = field.name()
-            key_item = QStandardItem(field_name)
-            value_item = QStandardItem()
-            value_item.setData([f.attribute(field_name) for f in features],
-                    Qt.ItemDataRole.DisplayRole)
-            self.model.appendRow([key_item, value_item])
-
-    def unload(self):
-        self.iface.currentLayerChanged.disconnect(self.slot_currentLayerChanged)
-        try:
-            self.current_layer.selectionChanged.disconnect(self.slot_selectionChanged)
-        except (AttributeError, RuntimeError):
-            # AttributeError: 'QgsRasterLayer' object has no attribute 'selectionChanged'
-            # AttributeError: 'NoneType' object has no attribute 'selectionChanged'
-            # RuntimeError: wrapped C/C++ object of type QgsVectorLayer has been deleted
-            pass
-        except Exception as e:
-            # DEBUG
-            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
-                    f'unload: {type(e)} {e}', 'Debug', level=Qgis.Info)
-            pass
-        self.save_dock_state()
 
 
 def classFactory(iface):

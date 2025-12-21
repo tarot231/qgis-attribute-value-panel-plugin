@@ -22,7 +22,7 @@
 """
 
 from collections import defaultdict, deque
-from qgis.PyQt.QtWidgets import *
+from qgis.PyQt.QtWidgets import QTabBar
 
 
 def restore_order(parts):
@@ -61,8 +61,8 @@ def get_all_tab_titles(target_dock):
     for tabbar in mainwin.findChildren(QTabBar):
         titles = [tabbar.tabText(i) for i in range(tabbar.count())]
         if title in titles:
-            return tuple(titles)
-    return None
+            return titles
+    return []
 
 
 def get_all_tabified(target_dock):

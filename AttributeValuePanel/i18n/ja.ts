@@ -4,12 +4,12 @@
 <context>
     <name>AttributeValueModel</name>
     <message>
-        <location filename="../ui.py" line="33"/>
+        <location filename="../ui.py" line="51"/>
         <source>Field</source>
         <translation>フィールド</translation>
     </message>
     <message>
-        <location filename="../ui.py" line="33"/>
+        <location filename="../ui.py" line="51"/>
         <source>Value</source>
         <translation>値</translation>
     </message>

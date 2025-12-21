@@ -21,10 +21,28 @@
  ***************************************************************************/
 """
 
-from qgis.PyQt.QtCore import Qt, QVariant, QLocale
+from qgis.PyQt.QtCore import Qt, QVariant, QDate, QTime, QDateTime
 from qgis.PyQt.QtGui import QPalette, QStandardItemModel
 from qgis.PyQt.QtWidgets import *
+from qgis.core import QgsDateTimeFieldFormatter
 from qgis.gui import QgsFilterLineEdit
+
+
+def to_str(x):
+    if isinstance(x, QDate):
+        return x.toString(QgsDateTimeFieldFormatter.DATE_FORMAT)
+    elif isinstance(x, QTime):
+        return x.toString(QgsDateTimeFieldFormatter.TIME_FORMAT)
+    elif isinstance(x, QDateTime):
+        return x.toString(QgsDateTimeFieldFormatter.DATETIME_FORMAT)
+    try:
+        return str(x)
+    except Exception as e:
+        # DEBUG
+        from qgis.core import QgsMessageLog
+        QgsMessageLog.logMessage(f'ui.py: '
+                f'to_str: {type(e)} {e}', 'Debug', level=Qgis.Info)
+        return '<%s>' % x.__class__.__name__
 
 
 class AttributeValueModel(QStandardItemModel):
@@ -45,21 +63,25 @@ class AttributeValueView(QTreeView):
         self.setItemDelegateForColumn(0, self.FieldItemDelegate(self))
         self.setItemDelegateForColumn(1, self.ValueItemDelegate(self))
 
-        self.setEditTriggers(QTreeView.EditTrigger.NoEditTriggers)
+    def set_editable(self, editable):
+        self.setEditTriggers(
+                QTreeView.EditTrigger.AllEditTriggers
+                if editable else
+                QTreeView.EditTrigger.NoEditTriggers)
 
     class FieldItemDelegate(QStyledItemDelegate):
         def createEditor(self, parent, option, index):
             return None
 
     class ValueItemDelegate(QStyledItemDelegate):
-        def displayText(self, value, locale):
-            return ', '.join(map(str,
-                    set(x if x is not None else 'NULL' for x in value)))
+        def displayText(self, value, locale=None):
+            return ', '.join(set(
+                    to_str(x) if x is not None else 'NULL' for x in value))
 
         def initStyleOption(self, option, index):
             super().initStyleOption(option, index)
-            data = index.data()
-            if None in data or len(set(data)) > 1:
+            value = index.data()
+            if None in value or any(x != value[0] for x in value):
                 option.font.setItalic(True)
                 option.palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.gray)
 
@@ -69,7 +91,7 @@ class AttributeValueView(QTreeView):
             return editor
 
         def setEditorData(self, editor, index):
-            editor.setText(self.displayText(index.data(), QLocale()))
+            editor.setText(self.displayText(index.data()))
 
         def setModelData(self, editor, model, index):
             model.setData(index, [editor.text()])
@@ -90,7 +112,8 @@ if __name__ == '__main__':
     for k, v in [('k1', [1]),
                  ('k2', ['2', '3']),
                  ('k3', [QVariant()]),
-                 ('k4', [4, QVariant(), 5, 4])]:
+                 ('k4', [4, QVariant(), 5, 4]),
+                 ('k5', [QDateTime.currentDateTime()])]:
         k_item = QStandardItem(k)
         v_item = QStandardItem()
         v_item.setData(v, Qt.ItemDataRole.DisplayRole)
