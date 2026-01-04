@@ -13,7 +13,7 @@
 
 /***************************************************************************
  *                                                                         *
- *   This program is free software; you can redistribute it and/or modify  *
+ *   This program is free sAttribute value changedoftware; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
  *   the Free Software Foundation; either version 2 of the License, or     *
  *   (at your option) any later version.                                   *
@@ -29,6 +29,7 @@ from qgis.core import *
 from qgis.gui import *
 from .ui import AttributeValueDock
 from .dock_utils import get_all_tabified, is_user_visible
+from .compat_type import CompatType
 
 
 class AttributeValuePanel(QObject):
@@ -42,12 +43,13 @@ class AttributeValuePanel(QObject):
 
     def initGui(self):
         self.name = self.tr('Attribute Value')
-        self.dock = AttributeValueDock()
+        self.dock = AttributeValueDock(self.iface.mainWindow())
         self.dock.setWindowTitle(self.name)
         self.dock.setObjectName(self.__class__.__name__.replace('Panel', ''))
         self.restore_dock_state()
 
         self.model = self.dock.view.model()
+        self.model.itemChanged.connect(self.slot_itemChanged)
         self.dock.view.set_editable(False)
 
         self.current_layer = None
@@ -65,36 +67,58 @@ class AttributeValuePanel(QObject):
             self.iface.currentLayerChanged.connect(self.slot_currentLayerChanged)
             self.slot_currentLayerChanged(self.iface.activeLayer())
         else:
+            self.disconnect_attributeValueChanged()
             self.disconnect_selectionChanged()
+            self.disconnect_editingStateChanged()
             self.disconnect_currentLayerChanged()
 
     def slot_currentLayerChanged(self, layer):
         self.clear_model()
+        self.disconnect_attributeValueChanged()
         self.disconnect_selectionChanged()
+        self.disconnect_editingStateChanged()
         self.current_layer = layer if isinstance(layer, QgsVectorLayer) else None
         try:
+            self.current_layer.editingStarted.connect(self.slot_editingStateChanged)
+            self.current_layer.editingStopped.connect(self.slot_editingStateChanged)
+            self.slot_editingStateChanged()
             self.current_layer.selectionChanged.connect(self.slot_selectionChanged)
+            self.current_layer.updatedFields.connect(self.slot_selectionChanged)
             self.slot_selectionChanged()
+
+            self.timer = QTimer()
+            self.timer.setSingleShot(True)
+            self.timer.timeout.connect(self.slot_timeout)
+            self.current_layer.attributeValueChanged.connect(self.slot_attributeValueChanged)
+            self.current_layer.featureDeleted.connect(self.slot_attributeValueChanged)
+
         except AttributeError:
-            # AttributeError: 'NoneType' object has no attribute 'selectionChanged'
             pass
         except Exception as e:
-            # DEBUG
-            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
-                    f'slot_currentLayerChanged: {type(e)} {e}', 'Debug', level=Qgis.Info)
-            pass
+            debug_message(self.__class__.__name__,
+                    f'slot_currentLayerChanged: {type(e)} {e}')
 
     def disconnect_currentLayerChanged(self):
         try:
             self.iface.currentLayerChanged.disconnect(self.slot_currentLayerChanged)
         except TypeError:
-            # TypeError: 'method' object is not connected
             pass
         except Exception as e:
-            # DEBUG
-            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
-                    f'disconnect_currentLayerChanged: {type(e)} {e}', 'Debug', level=Qgis.Info)
+            debug_message(self.__class__.__name__,
+                    f'disconnect_currentLayerChanged: {type(e)} {e}')
+
+    def slot_editingStateChanged(self):
+        self.dock.view.set_editable(self.current_layer.isEditable())
+
+    def disconnect_editingStateChanged(self):
+        try:
+            self.current_layer.editingStarted.disconnect(self.slot_editingStateChanged)
+            self.current_layer.editingStopped.disconnect(self.slot_editingStateChanged)
+        except (AttributeError, RuntimeError, TypeError):
             pass
+        except Exception as e:
+            debug_message(self.__class__.__name__,
+                    f'disconnect_editingStateChanged: {type(e)} {e}')
 
     def slot_selectionChanged(self):
         self.clear_model()
@@ -102,32 +126,81 @@ class AttributeValuePanel(QObject):
             if not self.current_layer.selectedFeatureCount():
                 return
         except Exception as e:
-            # DEBUG
-            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
-                    f'slot_selectionChanged: {type(e)} {e} {self.current_layer}', 'Debug', level=Qgis.Info)
+            debug_message(self.__class__.__name__,
+                    f'slot_selectionChanged: {type(e)} {e}')
             return
-        for field in self.current_layer.fields():
+        fields = self.current_layer.fields()
+        for idx in fields.allAttributesList():
+            field = fields.at(idx)
             field_name = field.name()
-            key_item = QStandardItem(field_name)
-            values = [f.attribute(field_name)
-                    for f in self.current_layer.getSelectedFeatures()]
+            key_item = QStandardItem()
+            key_item.setData(field, Qt.ItemDataRole.EditRole)
+            key_item.setData(fields.fieldOrigin(idx), Qt.ItemDataRole.UserRole)
+            value_gen = (f.attribute(field_name)
+                    for f in self.current_layer.getSelectedFeatures())
+            if field.type() == CompatType.QByteArray:
+                values = ('',)
+            elif (field.type() == CompatType.QVariantMap or
+                  field.typeName().endswith('List')):
+                values = tuple(str(s) for s in value_gen)
+            else:
+                values = value_gen
+            try:
+                values = tuple(set(values))
+            except TypeError:
+                values = tuple(value_gen)
             value_item = QStandardItem()
-            value_item.setData(values, Qt.ItemDataRole.DisplayRole)
+            value_item.setData(values, Qt.ItemDataRole.EditRole)
             self.model.appendRow([key_item, value_item])
 
     def disconnect_selectionChanged(self):
         try:
             self.current_layer.selectionChanged.disconnect(self.slot_selectionChanged)
-        except (AttributeError, RuntimeError):
+            self.current_layer.updatedFields.disconnect(self.slot_selectionChanged)
+        except (AttributeError, RuntimeError, TypeError):
             # AttributeError: 'Qgs***Layer' object has no attribute 'selectionChanged'
             # AttributeError: 'NoneType' object has no attribute 'selectionChanged'
             # RuntimeError: wrapped C/C++ object of type QgsVectorLayer has been deleted
+            # TypeError: 'method' object is not connected
             pass
         except Exception as e:
-            # DEBUG
-            QgsMessageLog.logMessage(f'{self.__class__.__name__}: '
-                    f'disconnect_selectionChanged: {type(e)} {e}', 'Debug', level=Qgis.Info)
+            debug_message(self.__class__.__name__,
+                    f'disconnect_selectionChanged: {type(e)} {e}')
+
+    def slot_attributeValueChanged(self):
+        self.timer.start(0)
+
+    def slot_timeout(self):
+        self.slot_selectionChanged()
+
+    def disconnect_attributeValueChanged(self):
+        try:
+            self.current_layer.attributeValueChanged.disconnect(self.slot_attributeValueChanged)
+            self.current_layer.featureDeleted.disconnect(self.slot_attributeValueChanged)
+        except (AttributeError, RuntimeError, TypeError):
             pass
+        except Exception as e:
+            debug_message(self.__class__.__name__,
+                    f'disconnect_attributeValueChanged: {type(e)} {e}')
+
+    def slot_itemChanged(self, item):
+        try:
+            assert self.current_layer.isEditable()
+        except AssertionError as e:
+            debug_message(self.__class__.__name__,
+                    f'slot_itemChanged: {type(e)} {e}')
+            return
+        field_index = item.row()
+        value = item.data(Qt.ItemDataRole.EditRole)[0]
+        self.current_layer.beginEditCommand(self.tr('Attribute value changed'))
+        res = True
+        for fid in self.current_layer.selectedFeatureIds():
+            res &= self.current_layer.changeAttributeValue(
+                    fid, field_index, value)
+        if not res:
+            debug_message(self.__class__.__name__,
+                    'slot_itemChanged: changeAttributeValue failed')
+        self.current_layer.endEditCommand()
 
     def clear_model(self):
         self.model.removeRows(0, self.model.rowCount())
@@ -179,6 +252,11 @@ class AttributeValuePanel(QObject):
                 [x.objectName() for x in get_all_tabified(self.dock)])
         st.setValue('dockArea', mainwin.dockWidgetArea(self.dock))
         st.endGroup()
+
+
+def debug_message(title, text):
+    QgsMessageLog.logMessage('%s: %s' % (title, text),
+            'Debug', Qgis.MessageLevel.Info)
 
 
 def classFactory(iface):

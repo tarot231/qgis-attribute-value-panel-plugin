@@ -4,12 +4,12 @@
 <context>
     <name>AttributeValueModel</name>
     <message>
-        <location filename="../ui.py" line="51"/>
+        <location filename="../ui.py" line="54"/>
         <source>Field</source>
         <translation>フィールド</translation>
     </message>
     <message>
-        <location filename="../ui.py" line="51"/>
+        <location filename="../ui.py" line="54"/>
         <source>Value</source>
         <translation>値</translation>
     </message>
@@ -17,9 +17,14 @@
 <context>
     <name>AttributeValuePanel</name>
     <message>
-        <location filename="../__init__.py" line="44"/>
+        <location filename="../__init__.py" line="45"/>
         <source>Attribute Value</source>
         <translation>属性値</translation>
+    </message>
+    <message>
+        <location filename="../__init__.py" line="195"/>
+        <source>Attribute value changed</source>
+        <translation>属性値を変更</translation>
     </message>
 </context>
 </TS>

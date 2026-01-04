@@ -21,34 +21,57 @@
  ***************************************************************************/
 """
 
-from qgis.PyQt.QtCore import Qt, QVariant, QDate, QTime, QDateTime
+from qgis.PyQt.QtCore import Qt, QVariant
 from qgis.PyQt.QtGui import QPalette, QStandardItemModel
 from qgis.PyQt.QtWidgets import *
-from qgis.core import QgsDateTimeFieldFormatter
-from qgis.gui import QgsFilterLineEdit
+from qgis.core import Qgis
+from qgis.gui import QgsFilterLineEdit, QgsDateEdit, QgsTimeEdit, QgsDateTimeEdit
+if Qgis.QGIS_VERSION_INT >= 33800:
+    FieldOrigin = Qgis.FieldOrigin
+else:
+    from qgis.core import QgsFields
+    FieldOrigin = QgsFields.FieldOrigin
+    FieldOrigin.Provider = FieldOrigin.OriginProvider
+    FieldOrigin.Edit = FieldOrigin.OriginEdit
+if __package__:
+    from .compat_type import CompatType
+else:
+    from compat_type import CompatType
 
 
-def to_str(x):
-    if isinstance(x, QDate):
-        return x.toString(QgsDateTimeFieldFormatter.DATE_FORMAT)
-    elif isinstance(x, QTime):
-        return x.toString(QgsDateTimeFieldFormatter.TIME_FORMAT)
-    elif isinstance(x, QDateTime):
-        return x.toString(QgsDateTimeFieldFormatter.DATETIME_FORMAT)
-    try:
-        return str(x)
-    except Exception as e:
-        # DEBUG
-        from qgis.core import QgsMessageLog
-        QgsMessageLog.logMessage(f'ui.py: '
-                f'to_str: {type(e)} {e}', 'Debug', level=Qgis.Info)
-        return '<%s>' % x.__class__.__name__
+def str_to_bool(s):
+    if s.lower() in {'n', 'no', 'f', 'false', 'off', '0'}:
+        return False
+    return bool(s)
 
 
 class AttributeValueModel(QStandardItemModel):
+    FIELD_COLUMN = 0
+    VALUE_COLUMN = 1
+
     def __init__(self):
         super().__init__()
         self.setHorizontalHeaderLabels([self.tr('Field'), self.tr('Value')])
+
+    def flags(self, index):
+        flags = super().flags(index)
+        if index.column() == self.VALUE_COLUMN:
+            field_index = index.siblingAtColumn(self.FIELD_COLUMN)
+            field = field_index.data(Qt.ItemDataRole.EditRole)
+            origin = field_index.data(Qt.ItemDataRole.UserRole)
+            if origin in (FieldOrigin.Provider, FieldOrigin.Edit):
+                if field.type() in (
+                        CompatType.Bool,
+                        CompatType.Int,
+                        CompatType.LongLong,
+                        CompatType.Double,
+                        CompatType.QString,
+                        CompatType.QDate,
+                        CompatType.QTime,
+                        CompatType.QDateTime,
+                ):
+                    return flags | Qt.ItemFlag.ItemIsEditable
+        return flags & ~Qt.ItemFlag.ItemIsEditable
 
 
 class AttributeValueView(QTreeView):
@@ -60,8 +83,10 @@ class AttributeValueView(QTreeView):
         self.header().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
 
         # https://stackoverflow.com/q/27248148
-        self.setItemDelegateForColumn(0, self.FieldItemDelegate(self))
-        self.setItemDelegateForColumn(1, self.ValueItemDelegate(self))
+        self.setItemDelegateForColumn(
+                AttributeValueModel.FIELD_COLUMN, self.FieldItemDelegate(self))
+        self.setItemDelegateForColumn(
+                AttributeValueModel.VALUE_COLUMN, self.ValueItemDelegate(self))
 
     def set_editable(self, editable):
         self.setEditTriggers(
@@ -70,36 +95,105 @@ class AttributeValueView(QTreeView):
                 QTreeView.EditTrigger.NoEditTriggers)
 
     class FieldItemDelegate(QStyledItemDelegate):
-        def createEditor(self, parent, option, index):
-            return None
+        def displayText(self, value, locale=None):
+            return value.name()
 
     class ValueItemDelegate(QStyledItemDelegate):
-        def displayText(self, value, locale=None):
-            return ', '.join(set(
-                    to_str(x) if x is not None else 'NULL' for x in value))
+        def displayText_(self, index):
+            data = index.data(Qt.ItemDataRole.EditRole)
+            field = index.siblingAtColumn(AttributeValueModel.FIELD_COLUMN
+                    ).data(Qt.ItemDataRole.EditRole)
+            if (field.type() == CompatType.QVariantMap or
+                field.typeName().endswith('List')):
+                strs = data
+            else:
+                strs = (field.displayString(x) for x in data)
+            return ', '.join(strs)
 
-        def initStyleOption(self, option, index):
-            super().initStyleOption(option, index)
-            value = index.data()
-            if None in value or any(x != value[0] for x in value):
-                option.font.setItalic(True)
-                option.palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.gray)
+        def paint(self, painter, option, index):
+            opt = QStyleOptionViewItem(option)
+            self.initStyleOption(opt, index)
+
+            data = index.data(Qt.ItemDataRole.EditRole)
+            if len(data) > 1:
+                opt.font.setItalic(True)
+            if QVariant() in data:
+                opt.font.setItalic(True)
+                opt.palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.gray)
+            opt.text = self.displayText_(index)
+
+            style = opt.widget.style() if opt.widget else QApplication.style()
+            style.drawControl(style.ControlElement.CE_ItemViewItem, opt, painter)
 
         def createEditor(self, parent, option, index):
-            editor = QgsFilterLineEdit(parent)
-            editor.setShowClearButton(True)
+            field = index.siblingAtColumn(AttributeValueModel.FIELD_COLUMN
+                    ).data(Qt.ItemDataRole.EditRole)
+            if field.type() == CompatType.QDate:
+                editor = QgsDateEdit(parent)
+                editor.dateValueChanged.connect(
+                        lambda: setattr(editor, 'value_changed', True))
+            elif field.type() == CompatType.QTime:
+                editor = QgsTimeEdit(parent)
+                editor.timeValueChanged.connect(
+                        lambda: setattr(editor, 'value_changed', True))
+            else:
+                if field.type() == CompatType.QDateTime:
+                    editor = QgsDateTimeEdit(parent)
+                else:
+                    editor = QgsFilterLineEdit(parent)
+                    editor.setNullValue(str(QVariant()))
+                editor.valueChanged.connect(
+                        lambda: setattr(editor, 'value_changed', True))
             return editor
 
         def setEditorData(self, editor, index):
-            editor.setText(self.displayText(index.data()))
+            if isinstance(editor, QgsDateEdit):
+                if index.data()[0]:
+                    editor.setDate(index.data()[0])
+            elif isinstance(editor, QgsTimeEdit):
+                if index.data()[0]:
+                    editor.setTime(index.data()[0])
+            elif isinstance(editor, QgsDateTimeEdit):
+                if index.data()[0]:
+                    editor.setDateTime(index.data()[0])
+            else:
+                editor.setText(self.displayText_(index))
+            editor.value_changed = False
 
         def setModelData(self, editor, model, index):
-            model.setData(index, [editor.text()])
+            if not getattr(editor, 'value_changed', False):
+                return
+            elif editor.isNull():
+                value = QVariant()
+            elif isinstance(editor, QgsDateEdit):
+                value = editor.date()
+            elif isinstance(editor, QgsTimeEdit):
+                value = editor.time()
+            elif isinstance(editor, QgsDateTimeEdit):
+                value = editor.dateTime()
+            else:
+                text = editor.text()
+                field = index.siblingAtColumn(AttributeValueModel.FIELD_COLUMN
+                        ).data(Qt.ItemDataRole.EditRole)
+                try:
+                    if field.type() == CompatType.Bool:
+                        value = str_to_bool(text) if len(text) else QVariant()
+                    elif field.type() == CompatType.Int:
+                        value = int(text) if len(text) else QVariant()
+                    elif field.type() == CompatType.LongLong:
+                        value = int(text) if len(text) else QVariant()
+                    elif field.type() == CompatType.Double:
+                        value = float(text) if len(text) else QVariant()
+                    else:
+                        value = text
+                except ValueError:
+                    return
+            model.setData(index, [value])
 
 
 class AttributeValueDock(QDockWidget):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self.view = AttributeValueView()
         self.view.setModel(AttributeValueModel())
         self.setWidget(self.view)
@@ -107,16 +201,21 @@ class AttributeValueDock(QDockWidget):
 
 if __name__ == '__main__':
     from qgis.PyQt.QtGui import QStandardItem
+    from qgis.PyQt.QtCore import QDateTime
+    from qgis.core import QgsField
     app = QApplication([])
     dock = AttributeValueDock()
-    for k, v in [('k1', [1]),
-                 ('k2', ['2', '3']),
-                 ('k3', [QVariant()]),
-                 ('k4', [4, QVariant(), 5, 4]),
-                 ('k5', [QDateTime.currentDateTime()])]:
-        k_item = QStandardItem(k)
+    for k, v in [(QgsField('bool', CompatType.Bool), [True]),
+                 (QgsField('int', CompatType.Int), [QVariant()]),
+                 (QgsField('double', CompatType.Double), [123.45, 678.90]),
+                 (QgsField('QString', CompatType.QString), ['abc', 'def', QVariant()]),
+                 (QgsField('QDateTime', CompatType.QDateTime), [QDateTime.currentDateTime()]),
+                ]:
+        k_item = QStandardItem()
+        k_item.setData(k, Qt.ItemDataRole.EditRole)
+        k_item.setData(FieldOrigin.Provider, Qt.ItemDataRole.UserRole)
         v_item = QStandardItem()
-        v_item.setData(v, Qt.ItemDataRole.DisplayRole)
+        v_item.setData(v, Qt.ItemDataRole.EditRole)
         dock.view.model().appendRow([k_item, v_item])
     dock.show()
     app.exec()
