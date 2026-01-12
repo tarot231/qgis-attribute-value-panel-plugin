@@ -13,7 +13,7 @@
 
 /***************************************************************************
  *                                                                         *
- *   This program is free sAttribute value changedoftware; you can redistribute it and/or modify  *
+ *   This program is free software; you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
  *   the Free Software Foundation; either version 2 of the License, or     *
  *   (at your option) any later version.                                   *
@@ -30,6 +30,10 @@ from qgis.gui import *
 from .ui import AttributeValueDock
 from .dock_utils import get_all_tabified, is_user_visible
 from .compat_type import CompatType
+if Qgis.QGIS_VERSION_INT >= 33600:
+    FeatureRequestFlag = Qgis.FeatureRequestFlag
+else:
+    FeatureRequestFlag = QgsFeatureRequest.Flag
 
 
 class AttributeValuePanel(QObject):
@@ -133,24 +137,28 @@ class AttributeValuePanel(QObject):
         for idx in fields.allAttributesList():
             field = fields.at(idx)
             field_name = field.name()
+
             key_item = QStandardItem()
             key_item.setData(field, Qt.ItemDataRole.EditRole)
             key_item.setData(fields.fieldOrigin(idx), Qt.ItemDataRole.UserRole)
-            value_gen = (f.attribute(field_name)
-                    for f in self.current_layer.getSelectedFeatures())
-            if field.type() == CompatType.QByteArray:
-                values = ('',)
-            elif (field.type() == CompatType.QVariantMap or
-                  field.typeName().endswith('List')):
-                values = tuple(str(s) for s in value_gen)
+
+            if ( field.type() == CompatType.QVariantMap or
+                 field.typeName().endswith('List') ):
+                conv = lambda x: str(x)
+            elif field.type() == CompatType.QByteArray:
+                conv = lambda x: NULL if x == None else True
             else:
-                values = value_gen
-            try:
-                values = tuple(set(values))
-            except TypeError:
-                values = tuple(value_gen)
+                conv = lambda x: NULL if x == None else x
+            req = (QgsFeatureRequest()
+                    .setSubsetOfAttributes([idx])
+                    .setFlags(FeatureRequestFlag.NoGeometry)
+            )
+            values = {conv(feat.attribute(field_name))
+                    for feat in self.current_layer.getSelectedFeatures(req)}
+
             value_item = QStandardItem()
             value_item.setData(values, Qt.ItemDataRole.EditRole)
+
             self.model.appendRow([key_item, value_item])
 
     def disconnect_selectionChanged(self):
@@ -212,8 +220,11 @@ class AttributeValuePanel(QObject):
 
         st = QgsSettings()
         st.beginGroup(self.__class__.__name__)
-        area = st.value('dockArea', Qt.DockWidgetArea.RightDockWidgetArea,
-                Qt.DockWidgetArea)
+        try:
+            area = st.value('dockArea',
+                    Qt.DockWidgetArea.RightDockWidgetArea, Qt.DockWidgetArea)
+        except TypeError:
+            area = Qt.DockWidgetArea.RightDockWidgetArea
         order = st.value('dockOrder', [], list)
         isVisible = st.value('visible', True, bool)
         isRaised = st.value('raised', True, bool)

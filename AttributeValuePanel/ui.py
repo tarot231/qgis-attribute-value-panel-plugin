@@ -21,10 +21,10 @@
  ***************************************************************************/
 """
 
-from qgis.PyQt.QtCore import Qt, QVariant
+from qgis.PyQt.QtCore import Qt, QDate, QTime, QDateTime
 from qgis.PyQt.QtGui import QPalette, QStandardItemModel
 from qgis.PyQt.QtWidgets import *
-from qgis.core import Qgis
+from qgis.core import Qgis, QgsApplication, NULL
 from qgis.gui import QgsFilterLineEdit, QgsDateEdit, QgsTimeEdit, QgsDateTimeEdit
 if Qgis.QGIS_VERSION_INT >= 33800:
     FieldOrigin = Qgis.FieldOrigin
@@ -117,7 +117,7 @@ class AttributeValueView(QTreeView):
             data = index.data(Qt.ItemDataRole.EditRole)
             if len(data) > 1:
                 opt.font.setItalic(True)
-            if QVariant() in data:
+            if NULL in data:
                 opt.font.setItalic(True)
                 opt.palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.gray)
             opt.text = self.displayText_(index)
@@ -131,40 +131,42 @@ class AttributeValueView(QTreeView):
             if field.type() == CompatType.QDate:
                 editor = QgsDateEdit(parent)
                 editor.dateValueChanged.connect(
-                        lambda: setattr(editor, 'value_changed', True))
+                        lambda: setattr(editor, 'value_changed_', True))
             elif field.type() == CompatType.QTime:
                 editor = QgsTimeEdit(parent)
                 editor.timeValueChanged.connect(
-                        lambda: setattr(editor, 'value_changed', True))
+                        lambda: setattr(editor, 'value_changed_', True))
             else:
                 if field.type() == CompatType.QDateTime:
                     editor = QgsDateTimeEdit(parent)
                 else:
                     editor = QgsFilterLineEdit(parent)
-                    editor.setNullValue(str(QVariant()))
+                    editor.setNullValue(QgsApplication.nullRepresentation())
                 editor.valueChanged.connect(
-                        lambda: setattr(editor, 'value_changed', True))
+                        lambda: setattr(editor, 'value_changed_', True))
             return editor
 
         def setEditorData(self, editor, index):
+            first = next(iter(index.data()))
             if isinstance(editor, QgsDateEdit):
-                if index.data()[0]:
-                    editor.setDate(index.data()[0])
+                if first:
+                    editor.setDate(first)
             elif isinstance(editor, QgsTimeEdit):
-                if index.data()[0]:
-                    editor.setTime(index.data()[0])
+                if first:
+                    editor.setTime(first)
             elif isinstance(editor, QgsDateTimeEdit):
-                if index.data()[0]:
-                    editor.setDateTime(index.data()[0])
+                if first:
+                    editor.setDateTime(first)
             else:
+                # TODO: https://doc.qt.io/qt-6/qlineedit.html#setValidator
                 editor.setText(self.displayText_(index))
-            editor.value_changed = False
+            setattr(editor, 'value_changed_', False)
 
         def setModelData(self, editor, model, index):
-            if not getattr(editor, 'value_changed', False):
+            if not getattr(editor, 'value_changed_', False):
                 return
             elif editor.isNull():
-                value = QVariant()
+                value = NULL
             elif isinstance(editor, QgsDateEdit):
                 value = editor.date()
             elif isinstance(editor, QgsTimeEdit):
@@ -177,18 +179,18 @@ class AttributeValueView(QTreeView):
                         ).data(Qt.ItemDataRole.EditRole)
                 try:
                     if field.type() == CompatType.Bool:
-                        value = str_to_bool(text) if len(text) else QVariant()
+                        value = str_to_bool(text) if len(text) else NULL
                     elif field.type() == CompatType.Int:
-                        value = int(text) if len(text) else QVariant()
+                        value = int(text) if len(text) else NULL
                     elif field.type() == CompatType.LongLong:
-                        value = int(text) if len(text) else QVariant()
+                        value = int(text) if len(text) else NULL
                     elif field.type() == CompatType.Double:
-                        value = float(text) if len(text) else QVariant()
+                        value = float(text) if len(text) else NULL
                     else:
                         value = text
                 except ValueError:
                     return
-            model.setData(index, [value])
+            model.setData(index, (value,))
 
 
 class AttributeValueDock(QDockWidget):
@@ -201,14 +203,15 @@ class AttributeValueDock(QDockWidget):
 
 if __name__ == '__main__':
     from qgis.PyQt.QtGui import QStandardItem
-    from qgis.PyQt.QtCore import QDateTime
     from qgis.core import QgsField
     app = QApplication([])
     dock = AttributeValueDock()
-    for k, v in [(QgsField('bool', CompatType.Bool), [True]),
-                 (QgsField('int', CompatType.Int), [QVariant()]),
-                 (QgsField('double', CompatType.Double), [123.45, 678.90]),
-                 (QgsField('QString', CompatType.QString), ['abc', 'def', QVariant()]),
+    for k, v in [(QgsField('bool', CompatType.Bool), {True}),
+                 (QgsField('int', CompatType.Int), {NULL}),
+                 (QgsField('double', CompatType.Double), {123.45, 678.90}),
+                 (QgsField('QString', CompatType.QString), {'abc', 'def', NULL}),
+                 (QgsField('QDate', CompatType.QDate), {QDate.currentDate()}),
+                 (QgsField('QTime', CompatType.QTime), [QTime.currentTime()]),
                  (QgsField('QDateTime', CompatType.QDateTime), [QDateTime.currentDateTime()]),
                 ]:
         k_item = QStandardItem()
