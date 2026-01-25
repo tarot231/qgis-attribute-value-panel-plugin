@@ -86,6 +86,12 @@ class AttributeValuePanel(QObject):
             self.current_layer.editingStarted.connect(self.slot_editingStateChanged)
             self.current_layer.editingStopped.connect(self.slot_editingStateChanged)
             self.slot_editingStateChanged()
+
+            self.dock.view.is_legacy_format = bool(
+                    self.current_layer.dataProvider().storageType() in (
+                    'ESRI Shapefile', 'MapInfo File'))
+            self.dock.view.encoding = self.current_layer.dataProvider().encoding()
+
             self.current_layer.selectionChanged.connect(self.slot_selectionChanged)
             self.current_layer.updatedFields.connect(self.slot_selectionChanged)
             self.slot_selectionChanged()
@@ -127,8 +133,7 @@ class AttributeValuePanel(QObject):
     def slot_selectionChanged(self):
         self.clear_model()
         try:
-            if not self.current_layer.selectedFeatureCount():
-                return
+            n_feats = self.current_layer.selectedFeatureCount()
         except Exception as e:
             debug_message(self.__class__.__name__,
                     f'slot_selectionChanged: {type(e)} {e}')
@@ -142,22 +147,30 @@ class AttributeValuePanel(QObject):
             key_item.setData(field, Qt.ItemDataRole.EditRole)
             key_item.setData(fields.fieldOrigin(idx), Qt.ItemDataRole.UserRole)
 
-            if ( field.type() == CompatType.QVariantMap or
-                 field.typeName().endswith('List') ):
-                conv = lambda x: str(x)
-            elif field.type() == CompatType.QByteArray:
-                conv = lambda x: NULL if x == None else True
+            if n_feats:
+                if ( field.type() == CompatType.QVariantMap or
+                    field.typeName().endswith('List') ):
+                    conv = lambda x: str(x)
+                elif field.type() == CompatType.QByteArray:
+                    conv = lambda x: NULL if x == None else True
+                else:
+                    conv = lambda x: NULL if x == None else x
+                req = (QgsFeatureRequest()
+                        .setSubsetOfAttributes([idx])
+                        .setFlags(FeatureRequestFlag.NoGeometry)
+                )
+                values = {conv(feat.attribute(field_name))
+                        for feat in self.current_layer.getSelectedFeatures(req)}
+                value_item = QStandardItem()
+                value_item.setData(values, Qt.ItemDataRole.EditRole)
             else:
-                conv = lambda x: NULL if x == None else x
-            req = (QgsFeatureRequest()
-                    .setSubsetOfAttributes([idx])
-                    .setFlags(FeatureRequestFlag.NoGeometry)
-            )
-            values = {conv(feat.attribute(field_name))
-                    for feat in self.current_layer.getSelectedFeatures(req)}
-
-            value_item = QStandardItem()
-            value_item.setData(values, Qt.ItemDataRole.EditRole)
+                s = field.displayType(showConstraints=True)
+                if 'NOT NULL' not in s:
+                    s = s.replace(' NULL', '')
+                values = (s, )
+                value_item = QStandardItem()
+                value_item.setData(values, Qt.ItemDataRole.DisplayRole)
+                value_item.setEnabled(False)
 
             self.model.appendRow([key_item, value_item])
 

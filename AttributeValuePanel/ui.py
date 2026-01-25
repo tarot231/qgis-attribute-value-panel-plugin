@@ -34,8 +34,10 @@ else:
     FieldOrigin.Provider = FieldOrigin.OriginProvider
     FieldOrigin.Edit = FieldOrigin.OriginEdit
 if __package__:
+    from .edit import IntFilterLineEdit, DoubleFilterLineEdit, ByteFilterLineEdit
     from .compat_type import CompatType
 else:
+    from edit import IntFilterLineEdit, DoubleFilterLineEdit, ByteFilterLineEdit
     from compat_type import CompatType
 
 
@@ -88,6 +90,9 @@ class AttributeValueView(QTreeView):
         self.setItemDelegateForColumn(
                 AttributeValueModel.VALUE_COLUMN, self.ValueItemDelegate(self))
 
+        self.is_legacy_format = False
+        self.encoding = 'utf-8'
+
     def set_editable(self, editable):
         self.setEditTriggers(
                 QTreeView.EditTrigger.AllEditTriggers
@@ -96,7 +101,7 @@ class AttributeValueView(QTreeView):
 
     class FieldItemDelegate(QStyledItemDelegate):
         def displayText(self, value, locale=None):
-            return value.name()
+            return value.displayNameWithAlias()
 
     class ValueItemDelegate(QStyledItemDelegate):
         def displayText_(self, index):
@@ -140,7 +145,17 @@ class AttributeValueView(QTreeView):
                 if field.type() == CompatType.QDateTime:
                     editor = QgsDateTimeEdit(parent)
                 else:
-                    editor = QgsFilterLineEdit(parent)
+                    if field.type() in (CompatType.Int, CompatType.LongLong):
+                        editor = IntFilterLineEdit(field.length(),
+                                self.parent().is_legacy_format, parent)
+                    elif field.type() == CompatType.Double:
+                        editor = DoubleFilterLineEdit(field.length(), field.precision(),
+                                self.parent().is_legacy_format, parent)
+                    elif field.type() == CompatType.QString:
+                        editor = ByteFilterLineEdit(field.length(), self.parent().encoding,
+                                self.parent().is_legacy_format, parent)
+                    else:
+                        editor = QgsFilterLineEdit(parent)
                     editor.setNullValue(QgsApplication.nullRepresentation())
                 editor.valueChanged.connect(
                         lambda: setattr(editor, 'value_changed_', True))
