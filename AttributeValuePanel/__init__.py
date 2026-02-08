@@ -34,6 +34,11 @@ if Qgis.QGIS_VERSION_INT >= 33600:
     FeatureRequestFlag = Qgis.FeatureRequestFlag
 else:
     FeatureRequestFlag = QgsFeatureRequest.Flag
+if Qgis.QGIS_VERSION_INT >= 33800:
+    FieldOrigin = Qgis.FieldOrigin
+else:
+    FieldOrigin = QgsFields.FieldOrigin
+    FieldOrigin.Unknown = FieldOrigin.OriginUnknown  # for read-only flag
 
 
 class AttributeValuePanel(QObject):
@@ -138,21 +143,41 @@ class AttributeValuePanel(QObject):
             debug_message(self.__class__.__name__,
                     f'slot_selectionChanged: {type(e)} {e}')
             return
+        dp = self.current_layer.dataProvider()
+        pks = dp.pkAttributeIndexes()
         fields = self.current_layer.fields()
         for idx in fields.allAttributesList():
             field = fields.at(idx)
             field_name = field.name()
 
+            is_autogen = False
+            if idx in pks:
+                if dp.name() == 'ogr':
+                    ctx = 'QgsOgrProvider'
+                elif dp.name() == 'spatialite':
+                    ctx = 'QgsSpatiaLiteProvider'
+                else:
+                    ctx = None
+                s_autogen = QgsApplication.translate(ctx, 'Autogenerate')
+                if dp.defaultValueClause(idx) == s_autogen:
+                    is_autogen = True
+
             key_item = QStandardItem()
             key_item.setData(field, Qt.ItemDataRole.EditRole)
-            key_item.setData(fields.fieldOrigin(idx), Qt.ItemDataRole.UserRole)
-
+            key_item.setData(fields.fieldOrigin(idx)
+                             if not is_autogen else
+                             FieldOrigin.Unknown,
+                             Qt.ItemDataRole.UserRole)
             if n_feats:
                 if ( field.type() == CompatType.QVariantMap or
                     field.typeName().endswith('List') ):
                     conv = lambda x: str(x)
                 elif field.type() == CompatType.QByteArray:
                     conv = lambda x: NULL if x == None else True
+                elif is_autogen:
+                    conv = lambda x: (NULL if x == None else
+                            x.defaultValueClause() if isinstance(x, QgsUnsetAttributeValue) else
+                            x)
                 else:
                     conv = lambda x: NULL if x == None else x
                 req = (QgsFeatureRequest()
@@ -167,6 +192,8 @@ class AttributeValuePanel(QObject):
                 s = field.displayType(showConstraints=True)
                 if 'NOT NULL' not in s:
                     s = s.replace(' NULL', '')
+                if idx in pks:
+                    s = s.replace('NOT NULL UNIQUE', 'PRIMARY KEY')
                 values = (s, )
                 value_item = QStandardItem()
                 value_item.setData(values, Qt.ItemDataRole.DisplayRole)

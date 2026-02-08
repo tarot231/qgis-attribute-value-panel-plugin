@@ -49,17 +49,30 @@ class IntLengthValidator(QValidator):
                 return (QValidator.State.Intermediate, input_, pos)
         return (QValidator.State.Invalid, input_, pos)
 
-    def fixup(self, input_):
-        return None
-
 
 class IntFilterLineEdit(QgsFilterLineEdit):
     def __init__(self, length=0, is_legacy=False, parent=None):
         super().__init__(parent)
         if length < 0:
             length = 0
-        validator = IntLengthValidator(length, is_legacy, self)
-        self.setValidator(validator)
+        self.is_ready = False
+        self.validator_ = IntLengthValidator(length, is_legacy, self)
+        self.valueChanged.connect(self.slot_valueChanged)
+
+    def slot_valueChanged(self, value):
+        if self.hasStateStored():
+            # Calling restoreState() causes hasStateStored() to return False.
+            self.is_ready = True
+        if not self.is_ready:
+            return
+        state, _, _ = self.validator_.validate(value, 0)
+        if state == QValidator.State.Invalid:
+            self.blockSignals(True)
+            self.restoreState()
+            self.blockSignals(False)
+        else:
+            self.valueChanged.disconnect(self.slot_valueChanged)
+            self.setValidator(self.validator_)
 
 
 def calc_max_float_value(length, prec):
@@ -111,7 +124,7 @@ class DoubleLengthValidator(QValidator):
         try:
             f = float(input_)
         except ValueError:
-            return None
+            return input_
         if f > self.top:
             f = self.top
         elif f < self.bottom:
@@ -125,8 +138,24 @@ class DoubleFilterLineEdit(QgsFilterLineEdit):
         super().__init__(parent)
         if length < 0:
             length = 0
-        validator = DoubleLengthValidator(length, prec, is_legacy, self)
-        self.setValidator(validator)
+        self.is_ready = False
+        self.validator_ = DoubleLengthValidator(length, prec, is_legacy, self)
+        self.valueChanged.connect(self.slot_valueChanged)
+
+    def slot_valueChanged(self, value):
+        if self.hasStateStored():
+            # Calling restoreState() causes hasStateStored() to return False.
+            self.is_ready = True
+        if not self.is_ready:
+            return
+        state, _, _ = self.validator_.validate(value, 0)
+        if state == QValidator.State.Invalid:
+            self.blockSignals(True)
+            self.restoreState()
+            self.blockSignals(False)
+        else:
+            self.valueChanged.disconnect(self.slot_valueChanged)
+            self.setValidator(self.validator_)
 
 
 class ByteLengthValidator(QValidator):
@@ -166,24 +195,34 @@ class ByteFilterLineEdit(QgsFilterLineEdit):
         super().__init__(parent)
         if not byte_length:
             return
-        if not is_legacy:
-            self.setMaxLength(byte_length)
-            return
-        self.validator = ByteLengthValidator(byte_length, encoding, self)
-        self.setValidator(self.validator)
+        self.byte_length = byte_length
+        self.is_legacy = is_legacy
+        self.is_ready = False
+        self.validator_ = ByteLengthValidator(byte_length, encoding, self)
         self.valueChanged.connect(self.slot_valueChanged)
         self._updating = False
 
     def slot_valueChanged(self, value):
+        if self.hasStateStored():
+            # Calling restoreState() causes hasStateStored() to return False.
+            self.is_ready = True
+        if not self.is_ready:
+            return
+        if not self.is_legacy:
+            self.valueChanged.disconnect(self.slot_valueChanged)
+            self.setMaxLength(self.byte_length)
+            return
+        elif not self.validator() is self.validator_:
+            self.setValidator(self.validator_)
         if self._updating:
             return
         if not value:
             return
-        state, _, _ = self.validator.validate(value, 0)
+        state, _, _ = self.validator_.validate(value, 0)
         if state == QValidator.State.Intermediate:
             self._updating = True
             cursor_pos = self.cursorPosition()
-            fixed_value = self.validator.fixup(value)
+            fixed_value = self.validator_.fixup(value)
             self.setValue(fixed_value)
             # For character inserton
             self.setCursorPosition(min(cursor_pos, len(fixed_value)))
@@ -196,15 +235,18 @@ if __name__ == '__main__':
     layout = QVBoxLayout()
 
     edit = IntFilterLineEdit(2, is_legacy=True)
-    edit.setPlaceholderText('IntFilterLineEdit')
+    edit.setText('IntFilterLineEdit')
+    edit.storeState()
     layout.addWidget(edit)
 
     edit = DoubleFilterLineEdit(3, 1, is_legacy=True)
-    edit.setPlaceholderText('DoubleFilterLineEdit')
+    edit.setText('DoubleFilterLineEdit')
+    edit.storeState()
     layout.addWidget(edit)
 
     edit = ByteFilterLineEdit(10, is_legacy=True)
-    edit.setPlaceholderText('ByteFilterLineEdit')
+    edit.setText('ByteFilterLineEdit')
+    edit.storeState()
     layout.addWidget(edit)
 
     dlg = QDialog()

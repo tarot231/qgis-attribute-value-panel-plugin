@@ -135,12 +135,10 @@ class AttributeValueView(QTreeView):
                     ).data(Qt.ItemDataRole.EditRole)
             if field.type() == CompatType.QDate:
                 editor = QgsDateEdit(parent)
-                editor.dateValueChanged.connect(
-                        lambda: setattr(editor, 'value_changed_', True))
+                editor.valueChanged_ = editor.dateValueChanged
             elif field.type() == CompatType.QTime:
                 editor = QgsTimeEdit(parent)
-                editor.timeValueChanged.connect(
-                        lambda: setattr(editor, 'value_changed_', True))
+                editor.valueChanged_ = editor.timeValueChanged
             else:
                 if field.type() == CompatType.QDateTime:
                     editor = QgsDateTimeEdit(parent)
@@ -154,11 +152,10 @@ class AttributeValueView(QTreeView):
                     elif field.type() == CompatType.QString:
                         editor = ByteFilterLineEdit(field.length(), self.parent().encoding,
                                 self.parent().is_legacy_format, parent)
+                        editor.setNullValue(QgsApplication.nullRepresentation())
                     else:
                         editor = QgsFilterLineEdit(parent)
-                    editor.setNullValue(QgsApplication.nullRepresentation())
-                editor.valueChanged.connect(
-                        lambda: setattr(editor, 'value_changed_', True))
+                editor.valueChanged_ = editor.valueChanged
             return editor
 
         def setEditorData(self, editor, index):
@@ -173,9 +170,11 @@ class AttributeValueView(QTreeView):
                 if first:
                     editor.setDateTime(first)
             else:
-                # TODO: https://doc.qt.io/qt-6/qlineedit.html#setValidator
                 editor.setText(self.displayText_(index))
+                editor.storeState()
             setattr(editor, 'value_changed_', False)
+            editor.valueChanged_.connect(
+                    lambda: setattr(editor, 'value_changed_', True))
 
         def setModelData(self, editor, model, index):
             if not getattr(editor, 'value_changed_', False):
@@ -221,8 +220,8 @@ if __name__ == '__main__':
     from qgis.core import QgsField
     app = QApplication([])
     dock = AttributeValueDock()
-    for k, v in [(QgsField('bool', CompatType.Bool), {True}),
-                 (QgsField('int', CompatType.Int), {NULL}),
+    for k, v in [(QgsField('bool', CompatType.Bool), {True, NULL}),
+                 (QgsField('int', CompatType.Int), {123, 456}),
                  (QgsField('double', CompatType.Double), {123.45, 678.90}),
                  (QgsField('QString', CompatType.QString), {'abc', 'def', NULL}),
                  (QgsField('QDate', CompatType.QDate), {QDate.currentDate()}),
