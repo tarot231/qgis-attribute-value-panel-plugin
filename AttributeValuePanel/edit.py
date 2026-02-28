@@ -26,53 +26,33 @@ from qgis.PyQt.QtCore import QRegularExpression
 from qgis.PyQt.QtGui import QValidator
 from qgis.gui import QgsFilterLineEdit
 
-
 class IntLengthValidator(QValidator):
     regex = QRegularExpression(r'^0$|' r'^-?[1-9]\d*$')
 
-    def __init__(self, length=0, is_legacy=False, parent=None):
+    def __init__(self, length, is_legacy, parent=None):
         super().__init__(parent)
         self.length = length
         self.is_legacy = is_legacy
 
-    def validate(self, input_, pos):
-        if not input_:
-            return (QValidator.State.Acceptable, input_, pos)
-        if self.regex.match(input_).hasMatch():
-            if self.length == 0:
-                return (QValidator.State.Acceptable, input_, pos)
-            v = int(input_)
-            if len(input_) <= self.length + (not self.is_legacy and v < 0):
-                return (QValidator.State.Acceptable, input_, pos)
-        if input_ == '-':
+    def validate(self, input, pos):
+        if not input:
+            return (QValidator.State.Acceptable, input, pos)
+        if self.regex.match(input).hasMatch():
+            if self.length <= 0:
+                return (QValidator.State.Acceptable, input, pos)
+            v = int(input)
+            if len(input) <= self.length + (not self.is_legacy and v < 0):
+                return (QValidator.State.Acceptable, input, pos)
+        if input == '-':
             if not (self.is_legacy and self.length == 1):
-                return (QValidator.State.Intermediate, input_, pos)
-        return (QValidator.State.Invalid, input_, pos)
+                return (QValidator.State.Intermediate, input, pos)
+        return (QValidator.State.Invalid, input, pos)
 
 
 class IntFilterLineEdit(QgsFilterLineEdit):
     def __init__(self, length=0, is_legacy=False, parent=None):
         super().__init__(parent)
-        if length < 0:
-            length = 0
-        self.is_ready = False
-        self.validator_ = IntLengthValidator(length, is_legacy, self)
-        self.valueChanged.connect(self.slot_valueChanged)
-
-    def slot_valueChanged(self, value):
-        if self.hasStateStored():
-            # Calling restoreState() causes hasStateStored() to return False.
-            self.is_ready = True
-        if not self.is_ready:
-            return
-        state, _, _ = self.validator_.validate(value, 0)
-        if state == QValidator.State.Invalid:
-            self.blockSignals(True)
-            self.restoreState()
-            self.blockSignals(False)
-        else:
-            self.valueChanged.disconnect(self.slot_valueChanged)
-            self.setValidator(self.validator_)
+        self.setValidator(IntLengthValidator(length, is_legacy, self))
 
 
 def calc_max_float_value(length, prec):
@@ -88,7 +68,7 @@ class DoubleLengthValidator(QValidator):
                                r'^-?0(\.\d*)?$|'
                                r'^-?[1-9]\d*(\.\d*)?$')
 
-    def __init__(self, length, prec, is_legacy=False, parent=None):
+    def __init__(self, length, prec, is_legacy, parent=None):
         super().__init__(parent)
         self.length = length
         self.prec = prec
@@ -96,38 +76,38 @@ class DoubleLengthValidator(QValidator):
         self.top = calc_max_float_value(length, prec)
         self.bottom = -calc_max_float_value(length - is_legacy, prec)
 
-    def validate(self, input_, pos):
-        if not input_:
-            return (QValidator.State.Acceptable, input_, pos)
-        if self.regex.match(input_).hasMatch():
-            if self.length == 0:
-                return (QValidator.State.Acceptable, input_, pos)
-            v = float(input_)
+    def validate(self, input, pos):
+        if not input:
+            return (QValidator.State.Acceptable, input, pos)
+        if self.regex.match(input).hasMatch():
+            if self.length <= 0:
+                return (QValidator.State.Acceptable, input, pos)
+            v = float(input)
             try:
-                idx = input_.index('.')
+                idx = input.index('.')
             except ValueError:
-                idx = len(input_)
+                idx = len(input)
             # Include the minus sign
             length_ = self.length + (not self.is_legacy and v < 0)
             if (idx <= length_ - self.prec) and \
-                    (len(input_) <= idx + 1 + self.prec):
-                if not (self.bottom <= v <= self.top):
-                    return (QValidator.State.Intermediate, input_, pos)
+                    (len(input) <= idx + 1 + self.prec):
+                if self.bottom <= v <= self.top:
+                    return (QValidator.State.Acceptable, input, pos)
                 else:
-                    return (QValidator.State.Acceptable, input_, pos)
-        if input_ == '-':
+                    return (QValidator.State.Intermediate, input, pos)
+        if input == '-':
             if not (self.is_legacy and (self.length - self.prec) == 1):
-                return (QValidator.State.Intermediate, input_, pos)
-        return (QValidator.State.Invalid, input_, pos)
+                return (QValidator.State.Intermediate, input, pos)
+        return (QValidator.State.Invalid, input, pos)
 
-    def fixup(self, input_):
+    def fixup(self, input):
         try:
-            f = float(input_)
+            f = float(input)
         except ValueError:
-            return input_
+            return input
         if f > self.top:
             f = self.top
-        elif f < self.bottom:
+        else:
             f = self.bottom
         s = ('%%.%df' % self.prec) % f
         return s
@@ -136,119 +116,71 @@ class DoubleLengthValidator(QValidator):
 class DoubleFilterLineEdit(QgsFilterLineEdit):
     def __init__(self, length=0, prec=0, is_legacy=False, parent=None):
         super().__init__(parent)
-        if length < 0:
-            length = 0
-        self.is_ready = False
-        self.validator_ = DoubleLengthValidator(length, prec, is_legacy, self)
-        self.valueChanged.connect(self.slot_valueChanged)
-
-    def slot_valueChanged(self, value):
-        if self.hasStateStored():
-            # Calling restoreState() causes hasStateStored() to return False.
-            self.is_ready = True
-        if not self.is_ready:
-            return
-        state, _, _ = self.validator_.validate(value, 0)
-        if state == QValidator.State.Invalid:
-            self.blockSignals(True)
-            self.restoreState()
-            self.blockSignals(False)
-        else:
-            self.valueChanged.disconnect(self.slot_valueChanged)
-            self.setValidator(self.validator_)
+        self.setValidator(DoubleLengthValidator(length, prec, is_legacy, self))
 
 
 class ByteLengthValidator(QValidator):
-    def __init__(self, byte_length, encoding='utf-8', parent=None):
+    def __init__(self, byte_length, encoding, parent=None):
         super().__init__(parent)
         self.byte_length = byte_length
         self.encoding = encoding
+        self.prev_value = None
 
-    def validate(self, input_, pos):
-        if not input_:
-            return (QValidator.State.Acceptable, input_, pos)
+    def validate(self, input, pos):
         try:
-            if len(input_.encode(self.encoding)) <= self.byte_length:
-                return (QValidator.State.Acceptable, input_, pos)
-            else:
-                return (QValidator.State.Intermediate, input_, pos)
-        except UnicodeEncodeError:
-            return (QValidator.State.Invalid, input_, pos)
+            if not input:
+                return (QValidator.State.Acceptable, input, pos)
+            try:
+                if len(input.encode(self.encoding)) <= self.byte_length:
+                    return (QValidator.State.Acceptable, input, pos)
+                fixed = self.fixup(input)
+                if fixed != self.prev_value:
+                    return (QValidator.State.Acceptable, fixed, min(pos, len(fixed)))
+            except UnicodeEncodeError:
+                pass
+            return (QValidator.State.Invalid, input, pos)
+        finally:
+            self.prev_value = input
 
-    def fixup(self, input_):
-        try:
-            encoded = input_.encode(self.encoding)
-            if len(encoded) > self.byte_length:
-                truncated = encoded[:self.byte_length]
-                while truncated:
-                    try:
-                        return truncated.decode(self.encoding)
-                    except UnicodeDecodeError:
-                        truncated = truncated[:-1]
-            return input_
-        except:
-            return None
+    def fixup(self, input):
+        encoded = input.encode(self.encoding)
+        if len(encoded) > self.byte_length:
+            truncated = encoded[:self.byte_length]
+            while truncated:
+                try:
+                    return truncated.decode(self.encoding)
+                except UnicodeDecodeError:
+                    truncated = truncated[:-1]
+        return input
 
 
 class ByteFilterLineEdit(QgsFilterLineEdit):
     def __init__(self, byte_length=0xFFFF, encoding='utf-8', is_legacy=False, parent=None):
         super().__init__(parent)
-        if not byte_length:
-            return
-        self.byte_length = byte_length
-        self.is_legacy = is_legacy
-        self.is_ready = False
-        self.validator_ = ByteLengthValidator(byte_length, encoding, self)
-        self.valueChanged.connect(self.slot_valueChanged)
-        self._updating = False
-
-    def slot_valueChanged(self, value):
-        if self.hasStateStored():
-            # Calling restoreState() causes hasStateStored() to return False.
-            self.is_ready = True
-        if not self.is_ready:
-            return
-        if not self.is_legacy:
-            self.valueChanged.disconnect(self.slot_valueChanged)
-            self.setMaxLength(self.byte_length)
-            return
-        elif not self.validator() is self.validator_:
-            self.setValidator(self.validator_)
-        if self._updating:
-            return
-        if not value:
-            return
-        state, _, _ = self.validator_.validate(value, 0)
-        if state == QValidator.State.Intermediate:
-            self._updating = True
-            cursor_pos = self.cursorPosition()
-            fixed_value = self.validator_.fixup(value)
-            self.setValue(fixed_value)
-            # For character inserton
-            self.setCursorPosition(min(cursor_pos, len(fixed_value)))
-            self._updating = False
+        if is_legacy:
+            self.setValidator(ByteLengthValidator(byte_length, encoding, self))
+        elif byte_length > 0:
+            self.setMaxLength(byte_length)
 
 
 if __name__ == '__main__':
-    from qgis.PyQt.QtWidgets import QApplication, QDialog, QVBoxLayout
+    from qgis.PyQt.QtWidgets import QApplication, QWidget, QVBoxLayout
     app = QApplication([])
-    layout = QVBoxLayout()
+    vbox = QVBoxLayout()
 
     edit = IntFilterLineEdit(2, is_legacy=True)
-    edit.setText('IntFilterLineEdit')
-    edit.storeState()
-    layout.addWidget(edit)
+    edit.setValue('IntFilterLineEdit')
+    vbox.addWidget(edit)
 
     edit = DoubleFilterLineEdit(3, 1, is_legacy=True)
-    edit.setText('DoubleFilterLineEdit')
-    edit.storeState()
-    layout.addWidget(edit)
+    edit.setValue('DoubleFilterLineEdit')
+    vbox.addWidget(edit)
 
     edit = ByteFilterLineEdit(10, is_legacy=True)
-    edit.setText('ByteFilterLineEdit')
-    edit.storeState()
-    layout.addWidget(edit)
+    edit.setValue('ByteFilterLineEdit')
+    vbox.addWidget(edit)
 
-    dlg = QDialog()
-    dlg.setLayout(layout)
-    dlg.exec_()
+    w = QWidget()
+    w.setLayout(vbox)
+    w.show()
+    app.exec()

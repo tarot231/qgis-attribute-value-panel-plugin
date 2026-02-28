@@ -21,7 +21,7 @@
  ***************************************************************************/
 """
 
-from qgis.PyQt.QtCore import Qt, QDate, QTime, QDateTime
+from qgis.PyQt.QtCore import Qt, QObject, QEvent, QDate, QTime, QDateTime
 from qgis.PyQt.QtGui import QPalette, QStandardItemModel
 from qgis.PyQt.QtWidgets import *
 from qgis.core import Qgis, QgsApplication, NULL
@@ -54,6 +54,8 @@ class AttributeValueModel(QStandardItemModel):
     def __init__(self):
         super().__init__()
         self.setHorizontalHeaderLabels([self.tr('Field'), self.tr('Value')])
+        self.is_legacy_format = False
+        self.encoding = 'utf-8'
 
     def flags(self, index):
         flags = super().flags(index)
@@ -76,6 +78,14 @@ class AttributeValueModel(QStandardItemModel):
         return flags & ~Qt.ItemFlag.ItemIsEditable
 
 
+class EnterFlagFilter(QObject):
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                obj.has_entered = True
+        return super().eventFilter(obj, event)
+
+
 class AttributeValueView(QTreeView):
     def __init__(self):
         super().__init__()
@@ -89,9 +99,6 @@ class AttributeValueView(QTreeView):
                 AttributeValueModel.FIELD_COLUMN, self.FieldItemDelegate(self))
         self.setItemDelegateForColumn(
                 AttributeValueModel.VALUE_COLUMN, self.ValueItemDelegate(self))
-
-        self.is_legacy_format = False
-        self.encoding = 'utf-8'
 
     def set_editable(self, editable):
         self.setEditTriggers(
@@ -145,17 +152,21 @@ class AttributeValueView(QTreeView):
                 else:
                     if field.type() in (CompatType.Int, CompatType.LongLong):
                         editor = IntFilterLineEdit(field.length(),
-                                self.parent().is_legacy_format, parent)
+                                self.parent().model().is_legacy_format, parent)
                     elif field.type() == CompatType.Double:
-                        editor = DoubleFilterLineEdit(field.length(), field.precision(),
-                                self.parent().is_legacy_format, parent)
+                        editor = DoubleFilterLineEdit(field.length(),
+                                field.precision(),
+                                self.parent().model().is_legacy_format, parent)
                     elif field.type() == CompatType.QString:
-                        editor = ByteFilterLineEdit(field.length(), self.parent().encoding,
-                                self.parent().is_legacy_format, parent)
+                        editor = ByteFilterLineEdit(field.length(),
+                                self.parent().model().encoding,
+                                self.parent().model().is_legacy_format, parent)
                         editor.setNullValue(QgsApplication.nullRepresentation())
                     else:
                         editor = QgsFilterLineEdit(parent)
                 editor.valueChanged_ = editor.valueChanged
+            editor.filter_ = EnterFlagFilter()  # for avoid GC
+            editor.installEventFilter(editor.filter_)
             return editor
 
         def setEditorData(self, editor, index):
@@ -170,16 +181,19 @@ class AttributeValueView(QTreeView):
                 if first:
                     editor.setDateTime(first)
             else:
-                editor.setText(self.displayText_(index))
-                editor.storeState()
-            setattr(editor, 'value_changed_', False)
+                if first is not None:
+                    editor.setValue(str(first))
             editor.valueChanged_.connect(
-                    lambda: setattr(editor, 'value_changed_', True))
+                    lambda: self.slot_valueChanged_(editor))
+
+        def slot_valueChanged_(self, editor):
+            setattr(editor, 'is_changed', True)
 
         def setModelData(self, editor, model, index):
-            if not getattr(editor, 'value_changed_', False):
-                return
-            elif editor.isNull():
+            if not getattr(editor, 'is_changed', False):
+                if not getattr(editor, 'has_entered', False):
+                    return
+            if editor.isNull():
                 value = NULL
             elif isinstance(editor, QgsDateEdit):
                 value = editor.date()
@@ -188,7 +202,7 @@ class AttributeValueView(QTreeView):
             elif isinstance(editor, QgsDateTimeEdit):
                 value = editor.dateTime()
             else:
-                text = editor.text()
+                text = editor.value()
                 field = index.siblingAtColumn(AttributeValueModel.FIELD_COLUMN
                         ).data(Qt.ItemDataRole.EditRole)
                 try:
@@ -225,7 +239,7 @@ if __name__ == '__main__':
                  (QgsField('double', CompatType.Double), {123.45, 678.90}),
                  (QgsField('QString', CompatType.QString), {'abc', 'def', NULL}),
                  (QgsField('QDate', CompatType.QDate), {QDate.currentDate()}),
-                 (QgsField('QTime', CompatType.QTime), [QTime.currentTime()]),
+                 (QgsField('QTime', CompatType.QTime), [QTime.currentTime(), QTime.currentTime()]),
                  (QgsField('QDateTime', CompatType.QDateTime), [QDateTime.currentDateTime()]),
                 ]:
         k_item = QStandardItem()
